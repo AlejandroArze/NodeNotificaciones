@@ -1,33 +1,59 @@
 const jwt = require('jsonwebtoken');
 const { User } = require('../models');
 
-const auth = async (req, res, next) => {
+module.exports = async (req, res, next) => {
   try {
-    const token = req.header('Authorization')?.replace('Bearer ', '');
-    
-    if (!token) {
-      throw new Error();
+    // Verificar si existe el token
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'NO_TOKEN',
+          message: 'Token no proporcionado'
+        }
+      });
     }
 
+    const token = authHeader.split(' ')[1];
+
+    // Verificar token
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-    const user = await User.findByPk(decoded.id);
 
+    // Buscar usuario
+    const user = await User.findByPk(decoded.id);
     if (!user) {
-      throw new Error();
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'INVALID_TOKEN',
+          message: 'Token inválido'
+        }
+      });
     }
 
-    req.token = token;
+    // Agregar usuario a la request
     req.user = user;
     next();
   } catch (error) {
-    res.status(401).json({
-      success: false,
-      error: {
-        code: 'AUTH_REQUIRED',
-        message: 'Por favor autentícate'
-      }
-    });
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'INVALID_TOKEN',
+          message: 'Token inválido'
+        }
+      });
+    }
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        error: {
+          code: 'TOKEN_EXPIRED',
+          message: 'Token expirado'
+        }
+      });
+    }
+    next(error);
   }
-};
-
-module.exports = auth; 
+}; 

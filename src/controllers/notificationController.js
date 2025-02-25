@@ -1,12 +1,24 @@
 const { Notification, DeviceToken, NotificationPreference, User } = require('../models');
-const FCMService = require('../services/fcmService');
-const { Op } = require('sequelize');
-const sequelize = require('../config/database');
+const NotificationService = require('../services/notificationService');
+const { ValidationError, Op } = require('sequelize');
+const logger = require('../utils/logger');
 
 class NotificationController {
   static async send(req, res, next) {
     try {
       const { userId, title, body, data, type } = req.body;
+
+      // Verificar si el usuario existe
+      const user = await User.findByPk(userId);
+      if (!user) {
+        return res.status(404).json({
+          success: false,
+          error: {
+            code: 'USER_NOT_FOUND',
+            message: 'Usuario no encontrado'
+          }
+        });
+      }
 
       // Verificar preferencias del usuario
       const preference = await NotificationPreference.findOne({
@@ -32,29 +44,15 @@ class NotificationController {
         type
       });
 
-      // Obtener tokens de dispositivo activos
-      const deviceTokens = await DeviceToken.findAll({
-        where: { user_id: userId, is_active: true }
-      });
-
-      if (deviceTokens.length > 0) {
-        // Enviar notificación a través de FCM
-        await FCMService.sendToMultipleDevices(
-          deviceTokens.map(dt => dt.device_token),
-          notification,
-          data
-        );
-
-        // Actualizar estado de la notificación
-        await notification.update({
-          status: 'sent',
-          sent_at: new Date()
-        });
-      }
+      // Enviar notificación
+      const result = await NotificationService.send(notification, userId);
 
       res.status(201).json({
         success: true,
-        data: notification
+        data: {
+          notification,
+          sent: result.success
+        }
       });
     } catch (error) {
       next(error);
@@ -62,154 +60,64 @@ class NotificationController {
   }
 
   static async broadcast(req, res, next) {
-    const t = await sequelize.transaction();
     try {
       const { title, body, data, type } = req.body;
 
-      // Obtener usuarios con preferencias activas
-      const users = await User.findAll({
+      // Obtener todos los usuarios con tokens activos
+      const deviceTokens = await DeviceToken.findAll({
+        where: { is_active: true },
         include: [{
-          model: NotificationPreference,
-          where: {
-            notification_type: type,
-            is_enabled: true
-          },
-          required: false
+          model: User,
+          required: true,
+          include: [{
+            model: NotificationPreference,
+            where: {
+              notification_type: type,
+              is_enabled: true
+            },
+            required: false
+          }]
         }]
       });
 
-      const notifications = [];
-      const deviceTokensBatch = [];
-
-      for (const user of users) {
-        // Crear notificación para cada usuario
-        const notification = await Notification.create({
-          user_id: user.id,
-          title,
-          body,
-          data,
-          type
-        }, { transaction: t });
-
-        notifications.push(notification);
-
-        // Obtener tokens de dispositivo activos
-        const deviceTokens = await DeviceToken.findAll({
-          where: { user_id: user.id, is_active: true }
-        });
-
-        deviceTokensBatch.push(...deviceTokens.map(dt => dt.device_token));
-      }
-
-      if (deviceTokensBatch.length > 0) {
-        // Enviar notificaciones en lotes
-        const response = await FCMService.sendToMultipleDevices(
-          deviceTokensBatch,
-          { title, body },
-          data
-        );
-
-        // Actualizar estado de las notificaciones
-        await Notification.update(
-          {
-            status: 'sent',
-            sent_at: new Date()
-          },
-          {
-            where: { id: notifications.map(n => n.id) },
-            transaction: t
+      if (deviceTokens.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'NO_ACTIVE_DEVICES',
+            message: 'No hay dispositivos activos para enviar la notificación'
           }
-        );
+        });
       }
 
-      await t.commit();
+      // Crear notificaciones para cada usuario
+      const notifications = await Promise.all(
+        deviceTokens.map(token => 
+          Notification.create({
+            user_id: token.user_id,
+            title,
+            body,
+            data,
+            type
+          })
+        )
+      );
+
+      // Enviar notificaciones
+      const result = await NotificationService.sendBulk(
+        { title, body, data, type },
+        deviceTokens.map(token => token.device_token)
+      );
 
       res.status(201).json({
         success: true,
         data: {
-          total_notifications: notifications.length,
-          total_devices: deviceTokensBatch.length
+          notifications_created: notifications.length,
+          sent: result.successCount,
+          failed: result.failureCount
         }
       });
     } catch (error) {
-      await t.rollback();
-      next(error);
-    }
-  }
-
-  static async bulk(req, res, next) {
-    const t = await sequelize.transaction();
-    try {
-      const { userIds, title, body, data, type } = req.body;
-
-      // Verificar preferencias de usuarios
-      const users = await User.findAll({
-        where: { id: userIds },
-        include: [{
-          model: NotificationPreference,
-          where: {
-            notification_type: type,
-            is_enabled: true
-          },
-          required: false
-        }]
-      });
-
-      const notifications = [];
-      const deviceTokensBatch = [];
-
-      for (const user of users) {
-        // Crear notificación para cada usuario
-        const notification = await Notification.create({
-          user_id: user.id,
-          title,
-          body,
-          data,
-          type
-        }, { transaction: t });
-
-        notifications.push(notification);
-
-        // Obtener tokens de dispositivo activos
-        const deviceTokens = await DeviceToken.findAll({
-          where: { user_id: user.id, is_active: true }
-        });
-
-        deviceTokensBatch.push(...deviceTokens.map(dt => dt.device_token));
-      }
-
-      if (deviceTokensBatch.length > 0) {
-        // Enviar notificaciones en lotes
-        const response = await FCMService.sendToMultipleDevices(
-          deviceTokensBatch,
-          { title, body },
-          data
-        );
-
-        // Actualizar estado de las notificaciones
-        await Notification.update(
-          {
-            status: 'sent',
-            sent_at: new Date()
-          },
-          {
-            where: { id: notifications.map(n => n.id) },
-            transaction: t
-          }
-        );
-      }
-
-      await t.commit();
-
-      res.status(201).json({
-        success: true,
-        data: {
-          total_notifications: notifications.length,
-          total_devices: deviceTokensBatch.length
-        }
-      });
-    } catch (error) {
-      await t.rollback();
       next(error);
     }
   }
@@ -217,29 +125,27 @@ class NotificationController {
   static async getAll(req, res, next) {
     try {
       const { page = 1, limit = 10, status } = req.query;
-      const user_id = req.user.id;
+      const offset = (page - 1) * limit;
 
-      const where = { user_id };
+      const where = { user_id: req.user.id };
       if (status) {
         where.status = status;
       }
 
-      const notifications = await Notification.findAndCountAll({
+      const { count, rows: notifications } = await Notification.findAndCountAll({
         where,
         limit: parseInt(limit),
-        offset: (page - 1) * limit,
+        offset: parseInt(offset),
         order: [['created_at', 'DESC']]
       });
 
       res.json({
         success: true,
         data: {
-          notifications: notifications.rows,
-          pagination: {
-            total: notifications.count,
-            page: parseInt(page),
-            pages: Math.ceil(notifications.count / limit)
-          }
+          total: count,
+          pages: Math.ceil(count / limit),
+          current_page: parseInt(page),
+          notifications
         }
       });
     } catch (error) {
@@ -282,11 +188,9 @@ class NotificationController {
 
   static async getUnread(req, res, next) {
     try {
-      const user_id = req.user.id;
-
       const notifications = await Notification.findAll({
         where: {
-          user_id,
+          user_id: req.user.id,
           status: { [Op.ne]: 'read' }
         },
         order: [['created_at', 'DESC']]

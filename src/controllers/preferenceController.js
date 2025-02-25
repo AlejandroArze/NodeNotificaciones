@@ -1,13 +1,13 @@
 const { NotificationPreference } = require('../models');
 const { ValidationError } = require('sequelize');
+const logger = require('../utils/logger');
 
 class PreferenceController {
   static async getAll(req, res, next) {
     try {
-      const user_id = req.user.id;
-
       const preferences = await NotificationPreference.findAll({
-        where: { user_id }
+        where: { user_id: req.user.id },
+        order: [['notification_type', 'ASC']]
       });
 
       res.json({
@@ -81,6 +81,9 @@ class PreferenceController {
         }
       });
     } catch (error) {
+      if (error instanceof ValidationError) {
+        error.name = 'ValidationError';
+      }
       next(error);
     }
   }
