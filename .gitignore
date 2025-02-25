@@ -1,3 +1,4 @@
 node_modules/
-.env
+*.log
+# .env  <- Comenta esta línea temporalmente si está
 dist/

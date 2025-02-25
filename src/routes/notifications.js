@@ -43,4 +43,15 @@ router.get('/unread', NotificationController.getUnread);
 // Marcar notificación como leída
 router.put('/:id/read', NotificationController.markAsRead);
 
+// POST /api/notifications/group
+// Enviar notificación a un grupo de usuarios
+router.post('/group', [
+  body('userIds').isArray().withMessage('userIds debe ser un array'),
+  body('userIds.*').isInt().withMessage('Todos los userIds deben ser números enteros'),
+  body('title').notEmpty().withMessage('El título es requerido'),
+  body('body').notEmpty().withMessage('El cuerpo es requerido'),
+  body('type').notEmpty().withMessage('El tipo es requerido'),
+  validate
+], NotificationController.sendToGroup);
+
 module.exports = router; 

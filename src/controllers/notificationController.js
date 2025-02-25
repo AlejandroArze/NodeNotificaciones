@@ -207,6 +207,99 @@ class NotificationController {
       next(error);
     }
   }
+
+  static async sendToGroup(req, res, next) {
+    try {
+      const { userIds, title, body, data, type } = req.body;
+
+      // Validar que userIds sea un array no vacío
+      if (!Array.isArray(userIds) || userIds.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'INVALID_USER_IDS',
+            message: 'Debe proporcionar un array de IDs de usuarios'
+          }
+        });
+      }
+
+      // Verificar que todos los usuarios existan
+      const users = await User.findAll({
+        where: { id: userIds },
+        include: [{
+          model: NotificationPreference,
+          where: { notification_type: type },
+          required: false
+        }]
+      });
+
+      if (users.length !== userIds.length) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'USERS_NOT_FOUND',
+            message: 'Algunos usuarios no fueron encontrados'
+          }
+        });
+      }
+
+      // Filtrar usuarios que tienen las notificaciones habilitadas
+      const enabledUsers = users.filter(user => 
+        !user.NotificationPreferences.length || 
+        user.NotificationPreferences[0].is_enabled
+      );
+
+      if (enabledUsers.length === 0) {
+        return res.status(400).json({
+          success: false,
+          error: {
+            code: 'NO_ENABLED_USERS',
+            message: 'Ningún usuario del grupo tiene habilitadas las notificaciones'
+          }
+        });
+      }
+
+      // Obtener tokens de dispositivos activos
+      const deviceTokens = await DeviceToken.findAll({
+        where: {
+          user_id: enabledUsers.map(user => user.id),
+          is_active: true
+        }
+      });
+
+      // Crear notificaciones para cada usuario
+      const notifications = await Promise.all(
+        enabledUsers.map(user =>
+          Notification.create({
+            user_id: user.id,
+            title,
+            body,
+            data,
+            type
+          })
+        )
+      );
+
+      // Enviar notificaciones
+      const result = await NotificationService.sendBulk(
+        { title, body, data, type },
+        deviceTokens.map(token => token.device_token)
+      );
+
+      res.status(201).json({
+        success: true,
+        data: {
+          total_users: userIds.length,
+          enabled_users: enabledUsers.length,
+          notifications_created: notifications.length,
+          sent: result.successCount,
+          failed: result.failureCount
+        }
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
 }
 
 module.exports = NotificationController; 
