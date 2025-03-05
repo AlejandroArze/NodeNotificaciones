@@ -42,6 +42,7 @@ app.use((err, req, res, next) => {
 });
 
 const PORT = process.env.PORT || 3000;
+const HOST = '0.0.0.0';
 
 // Iniciar servidor
 const start = async () => {
@@ -50,8 +51,9 @@ const start = async () => {
     await sequelize.authenticate();
     logger.info('Conexión a la base de datos establecida correctamente');
 
-    app.listen(PORT, () => {
-      logger.info(`Servidor corriendo en el puerto ${PORT}`);
+    app.listen(PORT, HOST, () => {
+      logger.info(`Servidor corriendo en http://${HOST}:${PORT}`);
+      logger.info(`Ambiente: ${process.env.NODE_ENV || 'development'}`);
     });
   } catch (error) {
     logger.error('Error al iniciar el servidor:', error);
@@ -60,3 +62,6 @@ const start = async () => {
 };
 
 start();
+
+// Exportar para testing o uso en otros módulos
+module.exports = app;
